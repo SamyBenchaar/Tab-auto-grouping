@@ -25,7 +25,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   notify: true,
   excludedDomains: [],
   provider: 'backend', // 'backend' (Cloud Run) | 'gemini' (AI Studio key, prototype) | 'heuristic'
-  backendUrl: 'https://tab-classifier-704211431512.europe-west1.run.app',
+  backendUrl: 'https://tab-classifier-11839059749.europe-west1.run.app',
   backendToken: '',
   geminiApiKey: '',
   geminiModel: DEFAULT_GEMINI_MODEL,
