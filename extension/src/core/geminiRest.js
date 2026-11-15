@@ -1,0 +1,85 @@
+// Direct call to the Gemini Developer API (AI Studio key) over REST, without any SDK.
+// Used by the extension's "prototype" mode and by the evaluation script. The production path is
+// the Cloud Run backend (Vertex AI + service account, no key in the extension).
+import { thinkingConfigFor } from './thinking.js';
+
+const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+export class GeminiApiError extends Error {
+  constructor(message, { status = 0, retryable = true } = {}) {
+    super(message);
+    this.name = 'GeminiApiError';
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
+/** REST body of models.generateContent (same layout as the @google/genai SDK sends). */
+export function buildGenerateContentBody({ systemInstruction, userContent, schema, thinkingConfig, temperature, maxOutputTokens = 8192 }) {
+  const generationConfig = { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens };
+  if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
+  if (typeof temperature === 'number' && Number.isFinite(temperature)) generationConfig.temperature = temperature;
+  return {
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    contents: [{ role: 'user', parts: [{ text: userContent }] }],
+    generationConfig,
+  };
+}
+
+/** Text of the first candidate, thoughts excluded. */
+export function extractResponseText(payload) {
+  const candidate = payload?.candidates?.[0];
+  if (!candidate) {
+    const reason = payload?.promptFeedback?.blockReason;
+    throw new GeminiApiError(reason ? `Requête bloquée par le modèle (${reason}).` : 'Réponse vide du modèle.', {
+      retryable: !reason,
+    });
+  }
+  const text = (candidate.content?.parts ?? [])
+    .filter((part) => typeof part.text === 'string' && !part.thought)
+    .map((part) => part.text)
+    .join('');
+  if (!text.trim()) {
+    throw new GeminiApiError(`Réponse vide du modèle (finishReason : ${candidate.finishReason ?? 'inconnu'}).`);
+  }
+  return text;
+}
+
+/**
+ * @param {{apiKey: string, model: string, input: {systemInstruction: string, userContent: string, schema: object},
+ *          timeoutMs?: number, thinking?: string, temperature?: number, fetchImpl?: typeof fetch}} options
+ * @returns {Promise<string>} raw JSON text produced by the model
+ */
+export async function callGeminiApi({ apiKey, model, input, timeoutMs = 8000, thinking, temperature, fetchImpl = globalThis.fetch }) {
+  if (!apiKey) throw new GeminiApiError('Clé API Gemini manquante.', { retryable: false });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      // The key travels in a header, never in the URL (URLs end up in logs).
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(
+        buildGenerateContentBody({ ...input, thinkingConfig: thinkingConfigFor(model, thinking), temperature }),
+      ),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = payload?.error?.message ?? response.statusText ?? '';
+      throw new GeminiApiError(`Gemini API ${response.status} : ${detail}`.trim(), {
+        status: response.status,
+        retryable: response.status === 408 || response.status === 429 || response.status >= 500,
+      });
+    }
+    return extractResponseText(payload);
+  } catch (error) {
+    if (error instanceof GeminiApiError) throw error;
+    if (error?.name === 'AbortError') {
+      throw new GeminiApiError(`Délai de ${Math.round(timeoutMs / 1000)} s dépassé.`, { status: 408 });
+    }
+    throw new GeminiApiError(`Réseau indisponible (${error?.message ?? error}).`);
+  } finally {
+    clearTimeout(timer);
+  }
+}

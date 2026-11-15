@@ -1,0 +1,22 @@
+// Thinking configuration per model family (latency matters more than deep reasoning here).
+const LEVELS = new Set(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
+
+/**
+ * - Gemini 3.x: thinkingLevel LOW (lowest level accepted by gemini-3.8-flash, which rejects MINIMAL).
+ * - Flash-Lite: model default (already MINIMAL).
+ * - Gemini 2.x Flash: thinkingBudget 0 (thinking disabled).
+ * `override`: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH', 'DEFAULT' (send nothing) or an integer budget.
+ * @returns {{thinkingLevel?: string, thinkingBudget?: number} | undefined}
+ */
+export function thinkingConfigFor(model, override) {
+  const value = String(override ?? '').trim().toUpperCase();
+  if (value === 'DEFAULT') return undefined;
+  if (LEVELS.has(value)) return { thinkingLevel: value };
+  if (/^-?\d+$/.test(value)) return { thinkingBudget: Number(value) };
+
+  const id = String(model ?? '').toLowerCase();
+  if (id.includes('flash-lite')) return undefined;
+  if (/^gemini-2[.-]/.test(id)) return id.includes('pro') ? undefined : { thinkingBudget: 0 };
+  if (/^gemini-[3-9]/.test(id)) return { thinkingLevel: 'LOW' };
+  return undefined;
+}

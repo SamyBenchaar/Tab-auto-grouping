@@ -1,0 +1,11 @@
+{
+  "name": "tab-context-grouper-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension (Manifest V3) that groups tabs by context with Gemini. No build step: load this folder unpacked.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "icons": "node scripts/make-icons.mjs"
+  }
+}

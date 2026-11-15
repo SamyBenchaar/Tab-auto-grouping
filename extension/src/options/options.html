@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Options · Tab Context Grouper</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <img src="../../icons/icon48.png" alt="" width="40" height="40" />
+        <div>
+          <h1>Tab Context Grouper</h1>
+          <p class="muted">Regroupe automatiquement vos onglets par contexte grâce à Gemini.</p>
+        </div>
+      </header>
+
+      <form id="settings-form" novalidate>
+        <section class="card">
+          <h2>Moteur de classification</h2>
+          <div class="choices" role="radiogroup" aria-label="Moteur">
+            <label class="choice">
+              <input type="radio" name="provider" value="backend" />
+              <span>
+                <strong>Backend Cloud Run</strong> <span class="tag">recommandé</span>
+                <small>Gemini sur Vertex AI via votre API. Aucune clé dans l'extension.</small>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="provider" value="gemini" />
+              <span>
+                <strong>Gemini API direct</strong> <span class="tag tag-warn">prototype</span>
+                <small>Appel direct avec une clé AI Studio stockée dans ce navigateur.</small>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="provider" value="heuristic" />
+              <span>
+                <strong>Heuristique locale</strong>
+                <small>Mots-clés et domaines, hors ligne, sans IA. Sert aussi de repli.</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="fields" data-provider="backend">
+            <label class="field">
+              <span>URL du backend</span>
+              <input type="url" name="backendUrl" placeholder="https://tab-classifier-xxxx.europe-west1.run.app" spellcheck="false" />
+              <small>HTTPS obligatoire (HTTP accepté uniquement pour localhost).</small>
+            </label>
+            <label class="field">
+              <span>Jeton d'accès</span>
+              <input type="password" name="backendToken" autocomplete="off" spellcheck="false" placeholder="Valeur du secret EXTENSION_TOKEN" />
+            </label>
+            <p class="hint">
+              Origine à autoriser côté backend (<code>ALLOWED_ORIGINS</code>) :
+              <code id="extension-origin"></code>
+              <button type="button" class="link" id="copy-origin">Copier</button>
+            </p>
+          </div>
+
+          <div class="fields" data-provider="gemini">
+            <label class="field">
+              <span>Clé API Gemini (AI Studio)</span>
+              <input type="password" name="geminiApiKey" autocomplete="off" spellcheck="false" />
+              <small class="warn">Mode prototype : la clé reste lisible dans ce profil Chrome. Passez au backend pour la démo finale.</small>
+            </label>
+          </div>
+
+          <div class="fields" data-provider="gemini">
+            <label class="field">
+              <span>Modèle</span>
+              <input type="text" name="geminiModel" list="models" spellcheck="false" />
+              <datalist id="models">
+                <option value="gemini-3.8-flash"></option>
+                <option value="gemini-3.5-flash"></option>
+                <option value="gemini-3.5-flash-lite"></option>
+                <option value="gemini-3.1-flash-lite"></option>
+              </datalist>
+            </label>
+          </div>
+
+          <div class="test-row">
+            <button type="button" class="btn" id="test-provider">Tester la connexion</button>
+            <p id="test-result" class="test-result" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Déclenchement</h2>
+          <div class="choices inline" role="radiogroup" aria-label="Mode">
+            <label class="choice">
+              <input type="radio" name="mode" value="auto" />
+              <span><strong>Automatique</strong><small>Dès que le seuil est atteint.</small></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="mode" value="manual" />
+              <span><strong>Manuel</strong><small>Bouton de la popup ou raccourci uniquement.</small></span>
+            </label>
+          </div>
+          <div class="grid">
+            <label class="field">
+              <span>Seuil d'onglets non groupés : <output id="threshold-value"></output></span>
+              <input type="range" name="threshold" min="5" max="50" step="1" />
+              <small>Premier regroupement automatique d'une fenêtre (5 à 50).</small>
+            </label>
+            <label class="field">
+              <span>Seuil incrémental</span>
+              <input type="number" name="incrementalThreshold" min="1" max="20" />
+              <small>Nouveaux onglets non groupés quand la fenêtre a déjà des groupes.</small>
+            </label>
+            <label class="field">
+              <span>Délai minimum entre deux regroupements (s)</span>
+              <input type="number" name="minDelaySeconds" min="10" max="600" />
+            </label>
+            <div class="field">
+              <span>Raccourci clavier</span>
+              <p class="shortcut"><kbd id="shortcut">non défini</kbd> <button type="button" class="link" id="edit-shortcut">Modifier</button></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Groupes</h2>
+          <div class="grid">
+            <label class="field">
+              <span>Nombre maximal de nouveaux groupes</span>
+              <input type="number" name="maxGroups" min="1" max="10" />
+            </label>
+            <label class="field">
+              <span>Langue des noms de groupes</span>
+              <select name="language" id="language"></select>
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" name="includeGroupedTabs" /> Réorganiser aussi les onglets déjà groupés (« tout regrouper »)</label>
+          <label class="check"><input type="checkbox" name="collapseInactive" /> Replier les groupes inactifs après un regroupement</label>
+          <label class="check"><input type="checkbox" name="notify" /> Notification après regroupement (avec bouton « Annuler »)</label>
+        </section>
+
+        <section class="card">
+          <h2>Confidentialité</h2>
+          <label class="field">
+            <span>Domaines exclus (un par ligne)</span>
+            <textarea name="excludedDomains" rows="4" spellcheck="false" placeholder="mabanque.fr&#10;mail.google.com"></textarea>
+            <small>Un domaine exclut aussi ses sous-domaines. Ces onglets ne sont jamais envoyés ni regroupés.</small>
+          </label>
+          <div class="privacy">
+            <p><strong>Données envoyées pour chaque onglet :</strong> titre (150 caractères max.), domaine, chemin de l'URL sans paramètres (identifiants longs masqués) et requête de recherche éventuelle. Jamais le contenu des pages.</p>
+            <p>Jamais envoyés : onglets épinglés, navigation privée, pages <code>chrome://</code> / <code>about:</code>, domaines exclus.</p>
+          </div>
+          <label class="check"><input type="checkbox" name="cacheEnabled" /> Cache local des classements (24 h) pour éviter des appels répétés</label>
+          <button type="button" class="btn btn-small" id="clear-cache">Vider le cache</button>
+        </section>
+
+        <div class="savebar">
+          <p id="save-status" class="save-status" role="status" aria-live="polite"></p>
+          <button type="button" class="btn" id="reset">Valeurs par défaut</button>
+          <button type="submit" class="btn btn-primary">Enregistrer</button>
+        </div>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "tab-classifier-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloud Run API that classifies browser tabs by context with Gemini (Vertex AI).",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "sync-core": "node scripts/sync-core.mjs",
+    "predev": "npm run sync-core",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "start": "node src/server.js",
+    "pretest": "npm run sync-core",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "eval": "npm run sync-core && node --env-file-if-exists=.env ../tools/eval.mjs",
+    "setup-gcp": "node scripts/setup-gcp.mjs",
+    "predeploy": "npm run sync-core && npm test",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "2.31.0",
+    "express": "^5.2.1"
+  }
+}
