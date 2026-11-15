@@ -3,9 +3,14 @@
   "name": "Tab Context Grouper",
   "version": "0.1.0",
   "description": "Regroupe automatiquement vos onglets par contexte grâce à Gemini.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo01U6zJ9u70MDqEcrXrZVELjWI+j/6brXwXbqq/vASgnqNr8IwxKE00mjCKn8u/h9WOccE+0Dv7iUF1O9oCVtVPbjn/oxmeyadlTs2Eq1YqCLwF2GWO96J2pT5h82raIs5se/UENDFmyeglpSoG5yaSaZT4ljeYBd2POava/kTB4X2EA8PE0bOJqE7MDYd/HDG9+yRWYtEHqNKRP7r9rcWqt9xsVL0ZVaCZddBR1WKPBZgqBSC9BgbBSf+wBTOkD0uh9lVhZKhODsMURf9FPwEperDbFHQ/4QHNv5twDFANzfO5TanAyjR1AHZSsyUCWIHpTkRMuBrtgLrJekIDJtQIDAQAB",
   "minimum_chrome_version": "120",
   "incognito": "not_allowed",
   "permissions": ["tabs", "tabGroups", "storage", "alarms", "notifications", "identity"],
+  "oauth2": {
+    "client_id": "11839059749-7efkjlsmvs7qlue6j38h4mnhb50ieau6.apps.googleusercontent.com",
+    "scopes": ["openid"]
+  },
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*",
