@@ -35,3 +35,16 @@ export function sourceLabel(source, model) {
 export function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
 }
+
+/** "19:00" in the user's time zone ('demain' when the date is unusable). */
+export function formatTime(iso) {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return 'demain';
+  return new Date(time).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** "12/50 aujourd'hui"; '' without a daily limit (owner token). */
+export function formatQuota(quota) {
+  if (!quota || !Number.isFinite(quota.used) || !Number.isFinite(quota.limit)) return '';
+  return `${quota.used}/${quota.limit} aujourd'hui`;
+}

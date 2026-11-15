@@ -28,6 +28,14 @@ export function createFakeChrome() {
   const calls = { group: 0, ungroup: 0, move: 0 };
   const onChanged = createEvent();
   let dispatchStorageEvents = false;
+  const manifest = {
+    manifest_version: 3,
+    version: '0.1.0',
+    oauth2: { client_id: '123456789012-fakeclient.apps.googleusercontent.com', scopes: ['openid'] },
+  };
+  // chrome.identity: a consent ("grant") lets Chrome mint tokens silently; tokens are cached until removed.
+  const identity = { granted: false, cached: null, approve: true, minted: 0, removed: [] };
+  const mintToken = () => `google-token-${(identity.minted += 1)}`;
 
   const clone = (value) => (value === undefined ? undefined : structuredClone(value));
 
@@ -102,7 +110,26 @@ export function createFakeChrome() {
       onMessage: createEvent(),
       openOptionsPage: async () => undefined,
       getURL: (path) => `chrome-extension://fake-extension-id/${path}`,
+      getManifest: () => clone(manifest),
       sendMessage: async () => undefined,
+    },
+    identity: {
+      async getAuthToken({ interactive = false } = {}) {
+        if (!identity.cached && identity.granted) identity.cached = mintToken();
+        if (!identity.cached && interactive && identity.approve) {
+          identity.granted = true;
+          identity.cached = mintToken();
+        }
+        if (!identity.cached) throw new Error(interactive ? 'The user did not approve access.' : 'OAuth2 not granted or revoked.');
+        return { token: identity.cached, grantedScopes: ['openid'] };
+      },
+      async removeCachedAuthToken({ token }) {
+        identity.removed.push(token);
+        if (identity.cached === token) identity.cached = null;
+      },
+      async clearAllCachedAuthTokens() {
+        identity.cached = null;
+      },
     },
     windows: {
       WINDOW_ID_NONE: NONE,
@@ -273,6 +300,8 @@ export function createFakeChrome() {
     notifications,
     badge,
     calls,
+    manifest, // mutable: e.g. delete manifest.oauth2 to simulate a build without Google sign-in
+    identity, // mutable: granted / cached / approve
     setDispatchStorageEvents(value) {
       dispatchStorageEvents = value;
     },

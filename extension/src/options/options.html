@@ -23,8 +23,8 @@
             <label class="choice">
               <input type="radio" name="provider" value="backend" />
               <span>
-                <strong>Backend Cloud Run</strong> <span class="tag">recommandé</span>
-                <small>Gemini sur Vertex AI via votre API. Aucune clé dans l'extension.</small>
+                <strong>Gemini via le service en ligne</strong> <span class="tag">recommandé</span>
+                <small>Connexion avec votre compte Google, aucune clé à fournir. Nombre de regroupements IA limité par jour.</small>
               </span>
             </label>
             <label class="choice">
@@ -44,20 +44,35 @@
           </div>
 
           <div class="fields" data-provider="backend">
-            <label class="field">
-              <span>URL du backend</span>
-              <input type="url" name="backendUrl" placeholder="https://tab-classifier-xxxx.europe-west1.run.app" spellcheck="false" />
-              <small>HTTPS obligatoire (HTTP accepté uniquement pour localhost).</small>
-            </label>
-            <label class="field">
-              <span>Jeton d'accès</span>
-              <input type="password" name="backendToken" autocomplete="off" spellcheck="false" placeholder="Valeur du secret EXTENSION_TOKEN" />
-            </label>
-            <p class="hint">
-              Origine à autoriser côté backend (<code>ALLOWED_ORIGINS</code>) :
-              <code id="extension-origin"></code>
-              <button type="button" class="link" id="copy-origin">Copier</button>
-            </p>
+            <div class="account" id="account" data-state="loading">
+              <div class="account-text">
+                <strong id="account-title">Compte Google</strong>
+                <p id="account-status" class="account-status" role="status" aria-live="polite">Vérification…</p>
+              </div>
+              <div class="account-actions">
+                <button type="button" class="btn btn-primary" id="sign-in" hidden>Se connecter avec Google</button>
+                <button type="button" class="btn" id="sign-out" hidden>Se déconnecter</button>
+              </div>
+            </div>
+
+            <details class="advanced">
+              <summary>Paramètres avancés (URL du backend, jeton propriétaire)</summary>
+              <label class="field">
+                <span>URL du backend</span>
+                <input type="url" name="backendUrl" placeholder="https://tab-classifier-xxxx.europe-west1.run.app" spellcheck="false" />
+                <small>HTTPS obligatoire (HTTP accepté uniquement pour localhost).</small>
+              </label>
+              <label class="field">
+                <span>Jeton propriétaire (facultatif)</span>
+                <input type="password" name="backendToken" autocomplete="off" spellcheck="false" placeholder="Valeur du secret EXTENSION_TOKEN" />
+                <small>Réservé au propriétaire du backend : remplace la connexion Google, sans limite quotidienne.</small>
+              </label>
+              <p class="hint">
+                Origine de cette extension (<code>ALLOWED_ORIGINS</code> côté backend) :
+                <code id="extension-origin"></code>
+                <button type="button" class="link" id="copy-origin">Copier</button>
+              </p>
+            </details>
           </div>
 
           <div class="fields" data-provider="gemini">
@@ -148,6 +163,8 @@
           <div class="privacy">
             <p><strong>Données envoyées pour chaque onglet :</strong> titre (150 caractères max.), domaine, chemin de l'URL sans paramètres (identifiants longs masqués) et requête de recherche éventuelle. Jamais le contenu des pages.</p>
             <p>Jamais envoyés : onglets épinglés, navigation privée, pages <code>chrome://</code> / <code>about:</code>, domaines exclus.</p>
+            <p>Compte Google : seule l'autorisation <code>openid</code> est demandée (ni nom, ni e-mail). Le serveur garde un identifiant pseudonyme et un compteur du jour, effacés après 2 à 3 jours.</p>
+            <p><a id="privacy-link" href="#" target="_blank" rel="noopener">Politique de confidentialité complète</a></p>
           </div>
           <label class="check"><input type="checkbox" name="cacheEnabled" /> Cache local des classements (24 h) pour éviter des appels répétés</label>
           <button type="button" class="btn btn-small" id="clear-cache">Vider le cache</button>

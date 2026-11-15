@@ -54,6 +54,13 @@ async function waitFor(condition, attempts = 200) {
   throw new Error('condition not reached');
 }
 
+/** Signs in through the service worker, as the popup / options button does. */
+async function signInWithGoogle() {
+  fake.identity.approve = true;
+  const result = await bg.handleMessage({ type: 'signIn' });
+  assert.equal(result.mode, 'google');
+}
+
 const CAR_TITLE = '\u{1F697} Voitures';
 const RESTAURANT_TITLE = '\u{1F37D}\u{FE0F} Restaurants';
 const TRAVEL_TITLE = '\u{2708}\u{FE0F} Voyage';
@@ -234,7 +241,7 @@ describe('backend provider', () => {
   });
 
   test('a tab closed during the analysis is skipped', async () => {
-    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example', backendToken: 'tok' });
     const win = fake.addWindow();
     const carIds = open(win, CARS);
     open(win, RESTAURANTS);
@@ -255,6 +262,7 @@ describe('backend provider', () => {
 
   test('unreachable backend: local heuristic fallback with a warning', async () => {
     await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
     const win = fake.addWindow();
     open(win, [...CARS, ...RESTAURANTS]);
     globalThis.fetch = async () => {
@@ -267,7 +275,7 @@ describe('backend provider', () => {
   });
 
   test('cache: regrouping the same tabs does not call the backend again', async () => {
-    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example', cacheEnabled: true });
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example', backendToken: 'tok', cacheEnabled: true });
     const win = fake.addWindow();
     const carIds = open(win, CARS);
     const restaurantIds = open(win, RESTAURANTS);
@@ -285,6 +293,165 @@ describe('backend provider', () => {
     assert.equal(calls.length, 1);
     assert.equal(Object.keys(await windowGroups(win)).length, 2);
     assert.equal((await bg.getPopupState(win)).status.lastRun.source, 'cache local');
+  });
+});
+
+describe('Google sign-in', () => {
+  const RESET_AT = '2026-11-16T00:00:00.000Z';
+
+  /** Fake backend: handler(path, init) -> {status, body}; also records the revocation calls. */
+  function backendRoutes(handler) {
+    const calls = [];
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).startsWith('https://oauth2.googleapis.com/revoke')) {
+        fake.identity.granted = false; // Google forgets the consent
+        return new Response(null, { status: 200 });
+      }
+      const { status = 200, body } = await handler(new URL(url).pathname, init);
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    };
+    return calls;
+  }
+  const classifyCalls = (calls) => calls.filter((call) => call.url.endsWith('/classify'));
+  const googleAnswer = (carIds, restaurantIds, quota) => ({
+    groups: [
+      { name: 'Voitures', emoji: '\u{1F697}', color: 'blue', existingGroupId: null, tabIds: carIds },
+      { name: 'Restaurants', emoji: '\u{1F37D}\u{FE0F}', color: 'orange', existingGroupId: null, tabIds: restaurantIds },
+    ],
+    ungrouped: [],
+    source: 'gemini',
+    model: 'gemini-3.8-flash',
+    ...(quota ? { quota } : {}),
+  });
+
+  test('signed in: the Google token is sent and the day\'s usage is shown', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    const win = fake.addWindow();
+    const carIds = open(win, CARS);
+    const restaurantIds = open(win, RESTAURANTS);
+    const calls = backendRoutes(() => ({ body: googleAnswer(carIds, restaurantIds, { used: 3, limit: 50, remaining: 47, resetAt: RESET_AT }) }));
+
+    const result = await bg.runGrouping(win, 'manual');
+    assert.equal(result.warning, undefined);
+    const [call] = classifyCalls(calls);
+    assert.equal(call.init.headers['X-User-Token'], fake.identity.cached);
+    assert.equal(call.init.headers['X-Extension-Token'], undefined);
+    const state = await bg.getPopupState(win);
+    assert.equal(state.account, 'google');
+    assert.equal(state.status.lastRun.quota, "3/50 aujourd'hui");
+    assert.equal(Object.keys(await windowGroups(win)).length, 2);
+  });
+
+  test('a token refused by the backend is replaced once, silently', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    const stale = fake.identity.cached;
+    const win = fake.addWindow();
+    const carIds = open(win, CARS);
+    const restaurantIds = open(win, RESTAURANTS);
+    const calls = backendRoutes((path, init) =>
+      init.headers['X-User-Token'] === stale
+        ? { status: 401, body: { error: 'Session Google expirée.', code: 'invalid_google_token' } }
+        : { body: googleAnswer(carIds, restaurantIds) },
+    );
+
+    const result = await bg.runGrouping(win, 'manual');
+    assert.equal(result.warning, undefined);
+    assert.equal(classifyCalls(calls).length, 2);
+    assert.ok(fake.identity.removed.includes(stale));
+    assert.notEqual(classifyCalls(calls)[1].init.headers['X-User-Token'], stale);
+  });
+
+  test('daily limit reached: keyword grouping with the reset time', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    const win = fake.addWindow();
+    open(win, [...CARS, ...RESTAURANTS]);
+    backendRoutes(() => ({
+      status: 429,
+      body: { error: 'Limite quotidienne atteinte.', code: 'daily_limit', scope: 'user', quota: { used: 50, limit: 50, remaining: 0, resetAt: RESET_AT } },
+    }));
+
+    const result = await bg.runGrouping(win, 'manual');
+    assert.match(result.warning, /^Limite quotidienne atteinte \(50 regroupements IA par jour\) : mots-clés jusqu'à \d\d:\d\d\.$/);
+    assert.equal(Object.keys(await windowGroups(win)).length, 2, 'the heuristic still groups the tabs');
+  });
+
+  test('the owner token takes precedence over Google sign-in', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example', backendToken: 'tok' });
+    const win = fake.addWindow();
+    const carIds = open(win, CARS);
+    const restaurantIds = open(win, RESTAURANTS);
+    const calls = backendRoutes(() => ({ body: googleAnswer(carIds, restaurantIds) }));
+    await bg.runGrouping(win, 'manual');
+    const [call] = classifyCalls(calls);
+    assert.equal(call.init.headers['X-Extension-Token'], 'tok');
+    assert.equal(call.init.headers['X-User-Token'], undefined);
+    assert.equal((await bg.getPopupState(win)).account, 'owner');
+  });
+
+  test('account: today\'s usage comes from /me without counting anything', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    const calls = backendRoutes((path) => ({ body: { auth: 'google', quota: { used: 7, limit: 50, remaining: 43, resetAt: RESET_AT } } }));
+    const account = await bg.handleMessage({ type: 'getAccount' });
+    assert.deepEqual(account, { ok: true, mode: 'google', quota: { used: 7, limit: 50, remaining: 43, resetAt: RESET_AT } });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://backend.example/me');
+    assert.equal(calls[0].init.method, 'GET');
+  });
+
+  test('sign-out revokes the access; afterwards nothing is sent to the backend', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await signInWithGoogle();
+    const token = fake.identity.cached;
+    const calls = backendRoutes(() => ({ body: {} }));
+
+    const signedOut = await bg.handleMessage({ type: 'signOut' });
+    assert.equal(signedOut.mode, 'signed-out');
+    const [revoke] = calls;
+    assert.equal(revoke.url, 'https://oauth2.googleapis.com/revoke');
+    assert.equal(revoke.init.body, `token=${token}`);
+    assert.equal(fake.identity.cached, null);
+
+    const win = fake.addWindow();
+    open(win, [...CARS, ...RESTAURANTS]);
+    const result = await bg.runGrouping(win, 'manual');
+    assert.match(result.warning, /^Non connecté : regroupement par mots-clés/);
+    assert.equal(classifyCalls(calls).length, 0, 'no credentials: the backend is not called');
+    assert.equal((await bg.getPopupState(win)).account, 'signed-out');
+    await assert.rejects(
+      bg.handleMessage({ type: 'testProvider', settings: { ...BASE_SETTINGS, provider: 'backend', backendUrl: 'https://backend.example' } }),
+      /non connecté à Google/,
+    );
+  });
+
+  test('a cancelled consent is reported', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    await bg.handleMessage({ type: 'signOut' }).catch(() => undefined);
+    fake.identity.approve = false;
+    const result = await bg.handleMessage({ type: 'signIn' });
+    assert.deepEqual(result, { ok: false, mode: 'signed-out', message: 'Connexion annulée.' });
+    fake.identity.approve = true;
+  });
+
+  test('no OAuth client in the manifest: sign-in is unavailable', async () => {
+    await setSettings({ provider: 'backend', backendUrl: 'https://backend.example' });
+    const saved = fake.manifest.oauth2;
+    delete fake.manifest.oauth2;
+    try {
+      assert.equal((await bg.handleMessage({ type: 'getAccount' })).mode, 'unavailable');
+      const win = fake.addWindow();
+      open(win, [...CARS, ...RESTAURANTS]);
+      const result = await bg.runGrouping(win, 'manual');
+      assert.match(result.warning, /^Connexion Google indisponible dans cette version/);
+    } finally {
+      fake.manifest.oauth2 = saved;
+    }
   });
 });
 

@@ -1,4 +1,5 @@
-// Options page: read / validate / save settings, connection test, cache, shortcut.
+// Options page: Google account, read / validate / save settings, connection test, cache, shortcut.
+import { formatTime } from '../shared/format.js';
 import { DEFAULT_SETTINGS, LANGUAGES, loadSettings, normalizeBackendUrl, sanitizeSettings, saveSettings } from '../shared/settings.js';
 
 const form = document.getElementById('settings-form');
@@ -67,9 +68,71 @@ function setSaveStatus(text, state = '') {
   element.dataset.state = state;
 }
 
+const ACCOUNT_TEXT = {
+  google: ['Connecté avec Google', 'Regroupement par IA activé.'],
+  'signed-out': ['Compte Google', 'Non connecté : sans connexion, les onglets sont regroupés par mots-clés (sans IA).'],
+  owner: ['Jeton propriétaire', 'Les requêtes utilisent le jeton propriétaire (paramètres avancés) : pas de limite quotidienne.'],
+  unavailable: ['Compte Google', "Connexion Google indisponible dans cette version de l'extension : utilisez un jeton propriétaire ou un autre moteur."],
+};
+
+const sentence = (text) => (/[.!?)]$/.test(text) ? text : `${text}.`);
+
+function renderAccount(account) {
+  const mode = ACCOUNT_TEXT[account?.mode] ? account.mode : 'signed-out';
+  const [title, text] = ACCOUNT_TEXT[mode];
+  const details = [];
+  if (mode === 'google' && account.quota) {
+    const { used, limit, resetAt } = account.quota;
+    details.push(`Aujourd'hui : ${used} / ${limit} regroupements IA (remise à zéro à ${formatTime(resetAt)}).`);
+  }
+  if (account?.message) details.push(sentence(account.ok === false && mode !== 'signed-out' ? `Problème : ${account.message}` : account.message));
+  $('account').dataset.state = account?.ok === false ? 'error' : mode;
+  $('account-title').textContent = title;
+  $('account-status').textContent = [text, ...details].join(' ');
+  $('sign-in').hidden = mode !== 'signed-out';
+  $('sign-out').hidden = mode !== 'google';
+}
+
+async function refreshAccount() {
+  try {
+    renderAccount(await chrome.runtime.sendMessage({ type: 'getAccount', settings: sanitizeSettings(readForm()) }));
+  } catch (error) {
+    renderAccount({ ok: false, mode: 'signed-out', message: error.message });
+  }
+}
+
+function initAccount(settings) {
+  $('privacy-link').href = `${settings.backendUrl}/privacy`;
+  $('sign-in').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $('account-status').textContent = 'Connexion en cours dans la fenêtre Google…';
+    try {
+      renderAccount(await chrome.runtime.sendMessage({ type: 'signIn' }));
+    } catch {
+      await refreshAccount(); // the service worker restarted during the consent: ask again
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $('sign-out').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      renderAccount(await chrome.runtime.sendMessage({ type: 'signOut' }));
+    } finally {
+      event.currentTarget.disabled = false;
+    }
+  });
+  for (const name of ['backendUrl', 'backendToken']) field(name).addEventListener('change', refreshAccount);
+  window.addEventListener('focus', refreshAccount);
+  refreshAccount();
+}
+
 async function init() {
   for (const [code, label] of LANGUAGES) $('language').append(new Option(label, code));
-  fillForm(await loadSettings());
+  const settings = await loadSettings();
+  fillForm(settings);
+  initAccount(settings);
 
   const origin = `chrome-extension://${chrome.runtime.id}`;
   $('extension-origin').textContent = origin;
@@ -97,8 +160,11 @@ async function init() {
       setSaveStatus(errors.join(' '), 'error');
       return;
     }
-    fillForm(await saveSettings(raw)); // show the normalised values
+    const saved = await saveSettings(raw);
+    fillForm(saved); // show the normalised values
     setSaveStatus('Enregistré ✓', 'ok');
+    $('privacy-link').href = `${saved.backendUrl}/privacy`;
+    refreshAccount();
   });
 
   $('reset').addEventListener('click', () => {

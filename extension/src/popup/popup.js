@@ -36,7 +36,8 @@ function showStatus(status, lastRun) {
   const idleMessage = lastState?.mode === 'manual' ? 'Mode manuel : cliquez sur « Regrouper maintenant ».' : 'En attente du seuil.';
   setText('status-message', status.message || idleMessage);
   const detail = $('status-detail');
-  const details = lastRun && status.state !== 'analyzing' ? [lastRun.details, `${lastRun.source} · ${lastRun.latency}`].filter(Boolean).join(' — ') : '';
+  const engine = lastRun ? [lastRun.source, lastRun.latency, lastRun.quota].filter(Boolean).join(' · ') : '';
+  const details = lastRun && status.state !== 'analyzing' ? [lastRun.details, engine].filter(Boolean).join(' — ') : '';
   detail.hidden = !details;
   detail.textContent = details;
   const warning = $('status-warning');
@@ -124,6 +125,7 @@ function render(state) {
   $('ungroup-all').disabled = analyzing || state.groups.length === 0;
 
   showStatus(state.status, state.status.lastRun);
+  $('signin').hidden = !(state.provider === 'backend' && state.account === 'signed-out');
   renderGroups(state.groups);
   setText('engine', (ENGINE_LABELS[state.provider] ?? ENGINE_LABELS.heuristic)(state));
 }
@@ -162,6 +164,8 @@ async function init() {
   $('undo').addEventListener('click', (event) => action('undo', event.currentTarget));
   $('ungroup-all').addEventListener('click', (event) => action('ungroupAll', event.currentTarget));
   $('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  // Handled by the service worker: the popup closes as soon as Google's window takes the focus.
+  $('sign-in').addEventListener('click', (event) => action('signIn', event.currentTarget));
   for (const button of document.querySelectorAll('.segmented button')) {
     button.addEventListener('click', async () => {
       await send({ type: 'setMode', mode: button.dataset.mode });

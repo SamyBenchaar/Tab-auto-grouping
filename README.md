@@ -1,6 +1,8 @@
 # Tab Context Grouper
 
-Extension Chrome (Manifest V3) qui regroupe automatiquement les onglets par **contexte** (« achat de voiture », « restaurants », « voyage à Rome »…) grâce à **Gemini sur Vertex AI**, appelé via une API **Cloud Run**. Aucune clé d'API n'est stockée dans l'extension.
+Extension Chrome (Manifest V3) qui regroupe automatiquement les onglets par **contexte** (« achat de voiture », « restaurants », « voyage à Rome »…) grâce à **Gemini sur Vertex AI**, appelé via une API **Cloud Run**. Aucune clé d'API n'est stockée dans l'extension : les utilisateurs se connectent avec Google et disposent d'un nombre de regroupements par IA limité par jour.
+
+Publication sur le Chrome Web Store (fiche non répertoriée) : voir [docs/publication.md](docs/publication.md).
 
 Exemple : 10 onglets ouverts, dont 4 recherches de voitures et 6 recherches de restaurants. Le 10ᵉ onglet déclenche le regroupement et produit deux groupes, `🚗 Voitures` et `🍽️ Restaurants`, environ 2,5 s plus tard (anti-rebond compris).
 
@@ -12,7 +14,7 @@ Le plan d'origine est dans [plan.md](plan.md). Les écarts par rapport à ce pla
 2. La page Options s'ouvre. Choisir un moteur :
    - **Heuristique locale** : fonctionne tout de suite, hors ligne, sans IA (mots-clés et domaines) ;
    - **Gemini API direct** (prototype) : coller une clé AI Studio. La clé reste dans ce profil Chrome ; à remplacer par le backend avant la démo ;
-   - **Backend Cloud Run** : voir les sections suivantes.
+   - **Gemini via le service en ligne** (backend Cloud Run) : bouton **Se connecter avec Google** (voir [Connexion Google et limite quotidienne](#connexion-google-et-limite-quotidienne)), ou jeton propriétaire dans **Paramètres avancés**.
 3. Cliquer sur **Tester la connexion**, puis ouvrir 10 onglets. Les groupes apparaissent ; la popup (icône de l'extension) permet ensuite de les annuler, de tout dégrouper ou de les renommer. Le raccourci `Alt+G` lance un regroupement manuel.
 
 ## Backend en local
@@ -31,7 +33,7 @@ Deux modes, à choisir dans `.env` :
 
 Sans identifiants, le serveur fonctionne quand même : chaque réponse vient alors de l'heuristique, avec un champ `error` qui explique pourquoi.
 
-Dans les options de l'extension, choisir **Backend Cloud Run**, avec l'URL `http://localhost:8080` et pour jeton la valeur de `EXTENSION_TOKEN` du `.env`.
+Dans les options de l'extension, choisir **Gemini via le service en ligne**, puis dans **Paramètres avancés** l'URL `http://localhost:8080` et, comme jeton propriétaire, la valeur de `EXTENSION_TOKEN` du `.env`. En local, les compteurs quotidiens restent en mémoire (`QUOTA_STORE=memory`).
 
 ## Déploiement sur Cloud Run
 
@@ -39,16 +41,30 @@ Prérequis : [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) insta
 
 ```powershell
 cd backend
-npm run setup-gcp -- --project <ID_PROJET>
-npm run deploy -- --project <ID_PROJET> --origin chrome-extension://<ID_EXTENSION>
+npm run setup-gcp   # projet lu dans deploy.config.json (ou --project <ID_PROJET>)
+npm run deploy
 ```
 
-- `setup-gcp` est rejouable sans risque (idempotent). Il active les API Vertex AI, Cloud Run, Artifact Registry, Cloud Build et Secret Manager. Il crée le compte de service `tab-classifier-sa` (rôle `roles/aiplatform.user`) et le secret `extension-token`, répliqué en `europe-west1`. **Il affiche le jeton une seule fois** : collez-le dans les options.
+- `setup-gcp` est rejouable sans risque (idempotent). Il active les API Vertex AI, Cloud Run, Artifact Registry, Cloud Build, Secret Manager et Firestore. Il crée :
+  - le compte de service `tab-classifier-sa` (rôles `roles/aiplatform.user` et `roles/datastore.user`) ;
+  - le secret `extension-token` (jeton propriétaire), répliqué en `europe-west1`. **Il l'affiche une seule fois** ;
+  - la base Firestore `(default)` en `europe-west1` (offre gratuite), avec une règle TTL qui efface les compteurs quotidiens au bout de deux jours.
 - `deploy` synchronise le cœur, lance les tests, puis exécute `gcloud run deploy --source`. Cloud Run tourne en `europe-west1`, Vertex AI est appelé sur la multi-région `eu`, avec 3 instances au maximum.
-- L'ID de l'extension (`--origin`) est affiché dans la page Options, rubrique Backend, avec un bouton Copier.
-- Si l'organisation interdit `--allow-unauthenticated` (Domain Restricted Sharing), il faut demander une exception : l'authentification repose sur le jeton applicatif.
+- Chaque déploiement remplace toutes les variables d'environnement du service. Les valeurs persistantes viennent donc de fichiers :
+  - [backend/deploy.config.json](backend/deploy.config.json) : projet, limites quotidiennes, contact affiché sur la page de confidentialité ;
+  - [extension/manifest.json](extension/manifest.json) : l'origine autorisée (ID de l'extension, déduit de `key`) et le client OAuth de la connexion Google (`oauth2.client_id`).
 
-Enfin, dans les options : moteur **Backend Cloud Run**, avec l'URL affichée par `deploy` et le jeton.
+  Les options `--origin`, `--oauth-client-id`, `--daily-limit`, `--global-daily-limit` et `--contact` les remplacent ponctuellement.
+- Si l'organisation interdit `--allow-unauthenticated` (Domain Restricted Sharing), il faut demander une exception : l'authentification repose sur la connexion Google et le jeton propriétaire.
+
+## Connexion Google et limite quotidienne
+
+- L'extension obtient un jeton d'accès Google avec `chrome.identity.getAuthToken` (portée `openid` seule : ni nom ni e-mail) et l'envoie dans l'en-tête `X-User-Token`. Les en-têtes `X-Google-…` sont supprimés par le frontal de Cloud Run, et `Authorization` est intercepté par lui.
+- Le backend vérifie le jeton auprès de Google : il doit avoir été émis pour le client OAuth de l'extension. Il en déduit un identifiant pseudonyme (empreinte SHA-256 de l'identifiant du compte).
+- **Limites** ([backend/deploy.config.json](backend/deploy.config.json)) : 30 regroupements IA par personne et par jour UTC, et 300 au total, comptés dans Firestore avant l'appel à Gemini. Au-delà, l'API répond 429 (`code: "daily_limit"`) et l'extension regroupe par mots-clés jusqu'à minuit UTC.
+- Le jeton propriétaire (`X-Extension-Token`) n'est pas limité : réservé au propriétaire, à l'évaluation et au développement.
+- `GET /me` renvoie l'utilisation du jour sans rien compter (page d'options). `GET /privacy` sert la politique de confidentialité ([backend/public/privacy.html](backend/public/privacy.html)).
+- La configuration Google (écran de consentement, client OAuth de type « Extension Chrome ») et la publication sont décrites dans [docs/publication.md](docs/publication.md).
 
 ## Évaluation (objectif : au moins 90 % d'onglets bien classés, moins de 3 s)
 
@@ -68,7 +84,7 @@ Le fichier [test-data/scenarios.json](test-data/scenarios.json) contient 10 scé
 ```powershell
 node tools/eval.mjs                                   # référence : heuristique seule (73,8 %)
 cd backend; npm run eval -- --provider local --runs 3 --verbose   # Gemini via le pipeline du backend (.env)
-node tools/eval.mjs --provider http --url https://<service>.run.app --token <jeton>
+node tools/eval.mjs --provider http --url https://<service>.run.app --token <jeton propriétaire>
 ```
 
 Le script mesure :
@@ -86,9 +102,10 @@ Le script mesure :
 ## Tests
 
 ```powershell
-cd extension; npm test     # 69 tests : cœur, heuristique, déclenchement, réglages, intégration du service worker (faux chrome.*)
-cd backend; npm test       # 12 tests : API (auth, CORS, 400/413/429/503, repli), configuration, synchro du cœur
+cd extension; npm test     # 80 tests : cœur, heuristique, déclenchement, réglages, service worker (faux chrome.*), connexion Google, paquet du store
+cd backend; npm test       # 30 tests : API (auth, CORS, 400/413/429/503, repli), connexion Google, limites quotidiennes, Firestore, page de confidentialité, configuration, synchro du cœur
 node tools/e2e-chrome.mjs  # vrai Chrome headless : regroupement auto + incrémental, popup, Annuler, options
+cd extension; npm run package   # dist/tab-context-grouper-<version>.zip pour le Chrome Web Store (voir docs/publication.md)
 ```
 
 Le test de bout en bout charge l'extension dans un profil temporaire, grâce à `Extensions.loadUnpacked` du protocole DevTools. Il ne touche pas à votre profil Chrome et range ses captures d'écran dans `tools/e2e-output/`.
@@ -164,10 +181,13 @@ Côté serveur, le traitement suit ces étapes :
   - les domaines exclus, définis dans les options.
 - Les titres sont traités comme des **données non fiables** : ils sont balisés et échappés dans le prompt, la sortie est validée côté serveur et le scénario d'injection fait partie de l'évaluation.
 - Le serveur ne journalise jamais les titres ni les URL : seulement des compteurs, la latence et les erreurs.
+- **Compte Google** : portée `openid` seule. Firestore ne contient qu'un identifiant pseudonyme, la date et un compteur par personne et par jour, effacés automatiquement (TTL) au bout de 2 à 3 jours.
+- Politique de confidentialité publique (français et anglais) : `GET /privacy` sur le backend, par exemple `https://tab-classifier-11839059749.europe-west1.run.app/privacy`.
 
 ## Limites connues et suites possibles
 
 - Gemini reste à évaluer en conditions réelles avec `npm run eval` (voir ci-dessus), puis le prompt est à ajuster ([extension/src/core/prompt.js](extension/src/core/prompt.js)).
-- Le jeton d'accès est partagé ; en V2, passer à Firebase Auth ou `chrome.identity`. La limitation de débit est en mémoire, par instance, et bornée par `--max-instances`.
+- La connexion Google passe par `chrome.identity.getAuthToken`, propre à Chrome : dans Edge ou Brave, utiliser l'heuristique locale ou une clé Gemini.
+- La limitation de débit par minute est en mémoire, par instance, et bornée par `--max-instances` ; les limites quotidiennes, elles, sont globales (Firestore).
+- L'autorisation d'hôte `https://*.run.app/*` couvre tous les services Cloud Run : on pourra la restreindre à l'URL du service une fois l'adresse définitive.
 - Hors MVP : meta description (`scripting`), cache serveur (Firestore), embeddings, Gemini Nano local.
-- Pour une publication sur le Chrome Web Store, zipper `extension/` sans `tests/`, `scripts/` ni `package.json`, et fournir une politique de confidentialité.

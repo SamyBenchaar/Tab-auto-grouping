@@ -1,11 +1,12 @@
 // Service worker: event wiring, debounce, threshold, grouping runs, undo, popup/options messages.
 import { errorMessage } from '../core/pipeline.js';
-import { describeApplied, formatSeconds, sourceLabel, summarizeRun } from '../shared/format.js';
+import { getGoogleToken, signOutGoogle } from '../shared/auth.js';
+import { describeApplied, formatQuota, formatSeconds, sourceLabel, summarizeRun } from '../shared/format.js';
 import { isSettingsChange, loadSettings, sanitizeSettings, saveSettings } from '../shared/settings.js';
 import { groupTitle, isGrouped, tabUrl, toTabPayload } from '../shared/tabs.js';
 import { selectTabs } from '../shared/trigger.js';
 import { clearCache } from './cache.js';
-import { classifyTabs } from './classifier.js';
+import { classifyTabs, describeAccount } from './classifier.js';
 import { buildRequest, collectWindow } from './collector.js';
 import { applyClassification } from './grouper.js';
 import { undoRun, ungroupWindow } from './history.js';
@@ -144,6 +145,7 @@ export async function runGrouping(windowId, trigger = 'manual') {
         details: describeApplied(run.applied),
         source: sourceLabel(result.source, result.model),
         latency: formatSeconds(result.latencyMs),
+        quota: formatQuota(result.quota) || undefined,
         trigger,
         at: run.at,
       },
@@ -208,7 +210,12 @@ export async function ungroupAll(windowId) {
 
 export async function getPopupState(windowId) {
   const settings = await loadSettings();
-  const [{ tabs, groups }, state, status] = await Promise.all([collectWindow(windowId), readState(), getStatus()]);
+  const [{ tabs, groups }, state, status, account] = await Promise.all([
+    collectWindow(windowId),
+    readState(),
+    getStatus(),
+    settings.provider === 'backend' ? describeAccount(settings, { checkBackend: false }) : null,
+  ]);
   const selection = selectTabs({ tabs, groups, seen: state.seen, settings, trigger: 'auto' });
   const groupTabs = (groupId) => tabs.filter((tab) => tab.groupId === groupId);
   return {
@@ -217,6 +224,7 @@ export async function getPopupState(windowId) {
     provider: settings.provider,
     model: settings.geminiModel,
     backendUrl: settings.backendUrl,
+    account: account?.mode ?? null, // 'owner' | 'google' | 'signed-out' | 'unavailable' (backend only)
     counts: {
       total: tabs.length,
       ungrouped: selection.ungroupedTotal,
@@ -252,10 +260,30 @@ async function testProvider(rawSettings) {
   const result = await classifyTabs(request, settings, { useCache: false, fallback: false });
   const names = result.groups.map((group) => groupTitle(group.emoji, group.name));
   const degraded = settings.provider !== 'heuristic' && result.source === 'heuristic';
+  const quota = formatQuota(result.quota);
   return {
     ok: !degraded,
-    message: `${degraded ? 'Attention' : 'OK'} : ${names.length} groupe(s) (${names.join(', ') || 'aucun'}) en ${formatSeconds(result.latencyMs)} via ${sourceLabel(result.source, result.model)}.${result.warning ? ` ${result.warning}` : ''}`,
+    message: `${degraded ? 'Attention' : 'OK'} : ${names.length} groupe(s) (${names.join(', ') || 'aucun'}) en ${formatSeconds(result.latencyMs)} via ${sourceLabel(result.source, result.model)}${quota ? ` · ${quota}` : ''}.${result.warning ? ` ${result.warning}` : ''}`,
   };
+}
+
+/** "Se connecter avec Google" (popup / options): Chrome shows Google's consent window once. */
+async function signIn() {
+  try {
+    await getGoogleToken({ interactive: true });
+  } catch (error) {
+    const text = errorMessage(error);
+    const message = /did not approve|cancel|closed/i.test(text) ? 'Connexion annulée.' : `Connexion Google impossible : ${text}`;
+    return { ok: false, mode: 'signed-out', message };
+  }
+  const account = await describeAccount(await loadSettings());
+  await setStatus({ state: 'idle', message: "Connecté avec Google : regroupement par IA activé." }).catch(reportError);
+  return account;
+}
+
+async function signOut() {
+  await signOutGoogle();
+  return describeAccount(await loadSettings(), { checkBackend: false });
 }
 
 export async function handleMessage(message) {
@@ -273,6 +301,12 @@ export async function handleMessage(message) {
       return { ok: true };
     case 'testProvider':
       return testProvider(message.settings);
+    case 'getAccount':
+      return describeAccount(message.settings ? sanitizeSettings(message.settings) : await loadSettings());
+    case 'signIn':
+      return signIn();
+    case 'signOut':
+      return signOut();
     case 'clearCache':
       await clearCache();
       return { ok: true, message: 'Cache vidé.' };

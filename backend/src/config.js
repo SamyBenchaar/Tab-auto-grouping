@@ -7,9 +7,13 @@ function toNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+const toList = (value) => String(value ?? '').split(/[\s,;]+/).filter(Boolean);
+const toLimit = (value, fallback) => Math.max(0, Math.floor(toNumber(value, fallback)));
+
 export function loadConfig(env = process.env) {
   const apiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '';
   const forceVertex = env.GOOGLE_GENAI_USE_VERTEXAI === 'true' || env.GOOGLE_GENAI_USE_ENTERPRISE === 'true';
+  const onCloudRun = Boolean(env.K_SERVICE);
   return {
     port: toNumber(env.PORT, 8080),
     // 'vertex': Vertex AI with Application Default Credentials (service account on Cloud Run).
@@ -23,10 +27,19 @@ export function loadConfig(env = process.env) {
     thinking: env.GEMINI_THINKING_LEVEL || '',
     temperature: env.GEMINI_TEMPERATURE ? toNumber(env.GEMINI_TEMPERATURE, undefined) : undefined,
     timeoutMs: toNumber(env.GEMINI_TIMEOUT_MS, 8000),
+    // Owner token (Secret Manager): full access, no daily limit. Never share it.
     extensionToken: env.EXTENSION_TOKEN || '',
-    allowedOrigins: (env.ALLOWED_ORIGINS || '').split(/[\s,;]+/).filter(Boolean),
+    // Google sign-in: OAuth client IDs (type "Chrome extension") whose access tokens are accepted.
+    oauthClientIds: toList(env.GOOGLE_OAUTH_CLIENT_IDS),
+    // Gemini classifications per signed-in user and per UTC day, and for all users together (0 = no limit).
+    dailyLimitPerUser: toLimit(env.DAILY_LIMIT_PER_USER, 50),
+    globalDailyLimit: toLimit(env.GLOBAL_DAILY_LIMIT, 300),
+    // 'firestore': counters shared by every Cloud Run instance. 'memory': local development and tests.
+    quotaStore: ['firestore', 'memory'].includes(env.QUOTA_STORE) ? env.QUOTA_STORE : onCloudRun ? 'firestore' : 'memory',
+    privacyContact: String(env.PRIVACY_CONTACT ?? '').trim(),
+    allowedOrigins: toList(env.ALLOWED_ORIGINS),
     rateLimitPerMinute: toNumber(env.RATE_LIMIT_PER_MINUTE, 30),
-    onCloudRun: Boolean(env.K_SERVICE),
+    onCloudRun,
     version: env.K_REVISION || 'local',
   };
 }
