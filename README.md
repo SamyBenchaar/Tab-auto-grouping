@@ -112,6 +112,33 @@ Le test de bout en bout charge l'extension dans un profil temporaire, grâce à 
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  subgraph Ext["Extension Chrome, Manifest V3"]
+    EV["Événements tabs.*<br/>anti-rebond 2,5 s"] --> SW["Service worker<br/>seuil, minimisation de la requête"]
+    SW --> UI["Groupes d'onglets<br/>Annuler, badge, notification"]
+  end
+  subgraph API["Cloud Run, Node.js"]
+    AU["Vérification du jeton Google<br/>quota quotidien"] --> VA["Validation de la requête"]
+    VA --> GE["Gemini sur Vertex AI<br/>sortie JSON contrainte"]
+    GE --> VR["Validation stricte de la réponse"]
+  end
+  FS[("Firestore<br/>compteurs quotidiens")]
+  HE["Heuristique locale<br/>mots-clés et domaines"]
+  SW -->|"POST /classify"| AU
+  AU <--> FS
+  VR --> SW
+  SW -.->|"hors ligne, quota atteint ou échec"| HE
+```
+
+- **Aucune clé dans l'extension.** L'utilisateur se connecte avec Google ; le backend vérifie le jeton et appelle Gemini avec son propre compte de service.
+- **Cœur partagé.** Le même code de classification (`core/`) tourne dans l'extension et dans le backend, copié par un script pour avoir une source unique.
+- **Requête minimisée.** Seuls le titre, le domaine, le chemin et la requête de recherche partent ; les identifiants d'onglet Chrome sont remplacés par 1…N avant d'atteindre le modèle.
+- **Sortie du modèle jamais crue sur parole.** Identifiants inconnus ou en double supprimés, groupes d'au moins 2 onglets, nombre de groupes plafonné.
+- **Toujours un résultat.** En cas d'échec, de quota atteint ou de hors-ligne, l'extension replie sur l'heuristique locale.
+
+Détail des dossiers et du flux :
+
 ```
 extension/                      chargée telle quelle par Chrome (modules ES, pas de build)
   manifest.json                 MV3 : tabs, tabGroups, storage, alarms, notifications ; incognito interdit
